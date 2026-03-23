@@ -1395,39 +1395,62 @@ async def listar_solicitacoes_cliente(cliente: dict = Depends(get_cliente_atual)
 # ============================================================
 
 @app.post("/api/assinatura/criar")
-async def criar_solicitacao_publica(
-    request: Request,
-    arquivos: list[UploadFile] | None = File(None),
-    arquivo: UploadFile | None = File(None),
-    documentos_json: str = Form(""),
-    titulo: str = Form(""),
-    tipo_documento: str = Form(""),
-    signatario_nome: str = Form(...),
-    signatario_email: str = Form(...),
-    signatario_cpf_cnpj: str = Form(...),
-    mensagem: str = Form(""),
-    contrato_mae: bool = Form(False),
-    incluir_assinatura_gold_credit: bool = Form(False),
-    assinatura_pagina: int = Form(0),
-    assinatura_x: float = Form(0.06),
-    assinatura_y: float = Form(0.06),
-    assinatura_largura: float = Form(0.44),
-    assinatura_altura: float = Form(0.12),
-    assinatura_pagina_gc: int = Form(0),
-    assinatura_x_gc: float = Form(0.06),
-    assinatura_y_gc: float = Form(0.41),
-    assinatura_largura_gc: float = Form(0.34),
-    assinatura_altura_gc: float = Form(0.07),
-    responsavel_solidario_nome: str = Form(""),
-    responsavel_solidario_email: str = Form(""),
-    responsavel_solidario_cpf_cnpj: str = Form(""),
-    assinatura_pagina_rs: int = Form(0),
-    assinatura_x_rs: float = Form(0.52),
-    assinatura_y_rs: float = Form(0.08),
-    assinatura_largura_rs: float = Form(0.44),
-    assinatura_altura_rs: float = Form(0.12),
-):
+async def criar_solicitacao_publica(request: Request):
     """Cria uma operação pública com um ou vários documentos sem depender de login."""
+    form = await request.form()
+
+    def form_str(name: str, default: str = "") -> str:
+        valor = form.get(name, default)
+        if valor is None:
+            return default
+        if hasattr(valor, "filename"):
+            return default
+        return str(valor)
+
+    def form_bool(name: str, default: bool = False) -> bool:
+        valor = form_str(name, "true" if default else "false").strip().lower()
+        return valor in ("1", "true", "on", "yes", "sim")
+
+    def form_int(name: str, default: int = 0) -> int:
+        try:
+            return int(form_str(name, str(default)).strip() or default)
+        except Exception:
+            return default
+
+    def form_float(name: str, default: float = 0.0) -> float:
+        try:
+            return float(form_str(name, str(default)).strip().replace(",", ".") or default)
+        except Exception:
+            return default
+
+    documentos_json = form_str("documentos_json", "")
+    titulo = form_str("titulo", "")
+    tipo_documento = form_str("tipo_documento", "")
+    signatario_nome = form_str("signatario_nome", "")
+    signatario_email = form_str("signatario_email", "")
+    signatario_cpf_cnpj = form_str("signatario_cpf_cnpj", "")
+    mensagem = form_str("mensagem", "")
+    contrato_mae = form_bool("contrato_mae", False)
+    incluir_assinatura_gold_credit = form_bool("incluir_assinatura_gold_credit", False)
+    assinatura_pagina = form_int("assinatura_pagina", 0)
+    assinatura_x = form_float("assinatura_x", 0.06)
+    assinatura_y = form_float("assinatura_y", 0.06)
+    assinatura_largura = form_float("assinatura_largura", 0.44)
+    assinatura_altura = form_float("assinatura_altura", 0.12)
+    assinatura_pagina_gc = form_int("assinatura_pagina_gc", 0)
+    assinatura_x_gc = form_float("assinatura_x_gc", 0.06)
+    assinatura_y_gc = form_float("assinatura_y_gc", 0.41)
+    assinatura_largura_gc = form_float("assinatura_largura_gc", 0.34)
+    assinatura_altura_gc = form_float("assinatura_altura_gc", 0.07)
+    responsavel_solidario_nome = form_str("responsavel_solidario_nome", "")
+    responsavel_solidario_email = form_str("responsavel_solidario_email", "")
+    responsavel_solidario_cpf_cnpj = form_str("responsavel_solidario_cpf_cnpj", "")
+    assinatura_pagina_rs = form_int("assinatura_pagina_rs", 0)
+    assinatura_x_rs = form_float("assinatura_x_rs", 0.52)
+    assinatura_y_rs = form_float("assinatura_y_rs", 0.08)
+    assinatura_largura_rs = form_float("assinatura_largura_rs", 0.44)
+    assinatura_altura_rs = form_float("assinatura_altura_rs", 0.12)
+
     signatario_email = (signatario_email or "").strip().lower()
     signatario_nome = (signatario_nome or "").strip()
     assinatura_doc = "".join(c for c in str(signatario_cpf_cnpj or "") if c.isdigit())
@@ -1436,9 +1459,12 @@ async def criar_solicitacao_publica(
     if not signatario_email:
         raise HTTPException(status_code=400, detail="Email do signatario e obrigatorio")
 
-    arquivos_recebidos = list(arquivos or [])
-    if arquivo is not None:
-        arquivos_recebidos.insert(0, arquivo)
+    arquivos_recebidos: list[UploadFile] = []
+    for chave, valor in form.multi_items():
+        if chave not in ("arquivos", "arquivo"):
+            continue
+        if hasattr(valor, "filename") and hasattr(valor, "read"):
+            arquivos_recebidos.append(valor)
     if not arquivos_recebidos:
         raise HTTPException(status_code=400, detail="Envie pelo menos um arquivo PDF")
 
