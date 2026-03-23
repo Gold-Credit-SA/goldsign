@@ -21,8 +21,25 @@ class Settings(BaseSettings):
 
     # App
     app_name: str = "Assinatura Digital ICP-Brasil"
-    frontend_url: str = "http://localhost:3000"
+    frontend_url: str = "https://operacoes.goldcreditcapital.com.br"
+    frontend_urls: str | None = None
     backend_url: str = "http://localhost:8000"
+    public_sender_email: str = "assinaturas@goldsign.local"
+    public_sender_name: str = "Operacao GoldSign"
+    public_sender_document: str = "00000000000001"
+    gold_credit_signer_email: str = "assinaturas@goldsign.local"
+    gold_credit_signer_name: str = "GOLD CREDIT SECURITIZADORA S/A"
+    gold_credit_signer_document: str = "39575046000174"
+    gold_credit_signature_page: int = 12
+    gold_credit_signature_x: float = 0.06
+    gold_credit_signature_y: float = 0.41
+    gold_credit_signature_width: float = 0.34
+    gold_credit_signature_height: float = 0.07
+    contract_mother_signature_page: int = 12
+    contract_mother_signature_x: float = 0.06
+    contract_mother_signature_y: float = 0.54
+    contract_mother_signature_width: float = 0.34
+    contract_mother_signature_height: float = 0.07
 
     # Assinatura
     signature_field_name: str = "AssinaturaICP"
@@ -31,6 +48,11 @@ class Settings(BaseSettings):
 
     # Link
     signing_link_expiration_days: int = 7
+
+    # Certificado A1 do servidor para assinatura automatica da cessionaria Gold Credit
+    # Valor: PKCS12 (.pfx) codificado em base64. Vazio = assinatura manual necessaria.
+    gold_credit_pkcs12_b64: str | None = None
+    gold_credit_pkcs12_password: str = ""
 
     @model_validator(mode="after")
     def validar_supabase(self):

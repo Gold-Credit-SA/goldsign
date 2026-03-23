@@ -1,0 +1,10 @@
+# Servidor local de assinatura
+flask==3.0.0
+flask-cors==4.0.0
+cryptography==41.0.7
+PyKCS11==1.5.12
+pyOpenSSL==23.3.0
+
+# Bandeja do sistema (system tray) — necessário para o executável
+pystray>=0.19.5
+Pillow>=10.0.0

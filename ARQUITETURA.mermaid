@@ -1,0 +1,69 @@
+---
+title: Assinatura Digital ICP-Brasil - Fluxo de Assinatura
+---
+flowchart TB
+    subgraph REMETENTE["👤 Remetente"]
+        R1[Upload PDF]
+        R2[Gerar Link de Assinatura]
+    end
+
+    subgraph FRONTEND["🌐 Frontend (React)"]
+        F1[Tela de Upload]
+        F2[Dashboard de Documentos]
+        F3[Visualizador de PDF]
+        F4[Seleção de Certificado]
+        F5[Confirmação de Assinatura]
+    end
+
+    subgraph BACKEND["⚙️ Backend (FastAPI)"]
+        B1[Upload & Storage]
+        B2[Gerar Token Seguro]
+        B3[Preparar Hash SHA-256]
+        B4[Verificar Assinatura CMS]
+        B5[Incorporar PAdES - pyHanko]
+        B6[Auditoria & Registro]
+    end
+
+    subgraph APP_LOCAL["🔐 App Local (Python/Flask)"]
+        A1[Listar Certificados]
+        A2[Acessar Keystore do SO]
+        A3[Integrar PKCS#11 - A3]
+        A4[Gerar Assinatura CMS/PKCS#7]
+    end
+
+    subgraph SUPABASE["🗄️ Supabase"]
+        DB[(PostgreSQL)]
+        ST[Storage - PDFs]
+    end
+
+    subgraph SIGNATARIO["✍️ Signatário"]
+        S1[Acessar Link Seguro]
+        S2[Visualizar PDF]
+        S3[Selecionar Certificado]
+        S4[Confirmar Assinatura]
+        S5[Baixar PDF Assinado]
+    end
+
+    R1 --> F1 --> B1 --> ST
+    B1 --> DB
+    R2 --> F2 --> B2
+    B2 --> DB
+
+    S1 --> F3 --> B3
+    F4 --> |localhost:8765| A1
+    A1 --> A2
+    A1 --> A3
+    S3 --> F4
+    F4 --> A4
+    A4 --> |CMS/PKCS#7| F5
+    F5 --> B4
+    B4 --> B5
+    B5 --> ST
+    B5 --> B6
+    B6 --> DB
+    S5 --> ST
+
+    style FRONTEND fill:#ebf8ff,stroke:#3182ce,color:#1a365d
+    style BACKEND fill:#f0fff4,stroke:#38a169,color:#276749
+    style APP_LOCAL fill:#fff5f5,stroke:#e53e3e,color:#9b2c2c
+    style SUPABASE fill:#faf5ff,stroke:#805ad5,color:#553c9a

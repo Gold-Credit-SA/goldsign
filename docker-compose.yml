@@ -1,0 +1,60 @@
+# Docker Compose para desenvolvimento local
+# Nota: O Supabase em produção é acessado via cloud.
+# Este compose sobe um PostgreSQL local para testes.
+
+version: '3.8'
+
+services:
+  # PostgreSQL local (alternativa ao Supabase para dev)
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: assinatura_digital
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./banco-de-dados/001_schema.sql:/docker-entrypoint-initdb.d/001_schema.sql
+      - ./banco-de-dados/003_seed.sql:/docker-entrypoint-initdb.d/003_seed.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Backend FastAPI
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - SUPABASE_DB_URL=${SUPABASE_DB_URL}
+      - JWT_SECRET=${JWT_SECRET:-chave-secreta-dev-32-caracteres-min}
+      - FRONTEND_URL=http://localhost:3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+
+  # Frontend React
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+      - REACT_APP_LOCAL_SIGNER_URL=http://localhost:8765
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:

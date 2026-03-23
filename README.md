@@ -1,72 +1,80 @@
-# 📝 Assinatura Digital ICP-Brasil
+# GoldSign
 
-Sistema completo de assinatura digital com validade jurídica no Brasil, baseado em certificados ICP-Brasil (A1 e A3) no padrão PAdES.
+Sistema de operacao e assinatura digital com foco em:
 
-## 🏗️ Arquitetura
+- gestao de clientes, cedentes, carteira e consultas operacionais
+- emissao e acompanhamento de solicitacoes de assinatura
+- assinatura digital ICP-Brasil com certificados A1 e A3
+- rastreabilidade de documentos, solicitacoes e auditoria
 
-```
-assinatura-digital/
-├── backend/          # FastAPI - API principal
-├── frontend/         # React - Interface do usuário
-├── app/              # Python - Aplicativo local (acessa certificados)
-└── banco-de-dados/   # PostgreSQL via Supabase - Schemas e migrations
-```
+## Estrutura do repositorio
 
-## 🔄 Fluxo de Assinatura
-
-1. **Remetente** faz upload do PDF via frontend
-2. **Backend** armazena o PDF e gera um link seguro
-3. **Destinatário** acessa o link, visualiza o documento
-4. **Frontend** se comunica com o **App Local** (localhost:8765)
-5. **App Local** lista certificados ICP-Brasil instalados na máquina
-6. **Destinatário** seleciona o certificado e confirma a assinatura
-7. **App Local** gera a assinatura CMS/PKCS#7 com a chave privada
-8. **Frontend** envia a assinatura ao **Backend**
-9. **Backend** incorpora a assinatura ao PDF no padrão PAdES via pyHanko
-10. **PDF assinado** é armazenado com metadados de auditoria
-
-## 🚀 Instalação e Execução
-
-### Pré-requisitos
-- Python 3.10+
-- Node.js 18+
-- Conta no Supabase (ou PostgreSQL local)
-
-### Backend
-```bash
-cd backend
-pip install -r requirements.txt
-cp .env.example .env  # Configure suas variáveis
-uvicorn main:app --reload --port 8000
+```text
+GoldSign/
+|-- operacoes-goldcredit/   # Frontend principal no Lovable + edge functions no Supabase
+|-- backend/                # API FastAPI com regras de assinatura e autenticacao sensivel
+|-- app/                    # Aplicativo local para acesso a certificados ICP-Brasil
+|-- banco-de-dados/         # Schemas, policies, seeds e migrations SQL
+|-- docs/                   # Documentacao principal do sistema
+|-- docker-compose.yml      # Apoio a desenvolvimento local
+`-- ARQUITETURA.mermaid     # Diagrama de alto nivel
 ```
 
-### Frontend
-```bash
-cd frontend
-npm install
-cp .env.example .env  # Configure suas variáveis
-npm start
-```
+## Como o sistema se divide
 
-### App Local (na máquina do signatário)
-```bash
-cd app
-pip install -r requirements.txt
-python main.py
-# Inicia em http://localhost:8765
-```
+### `operacoes-goldcredit`
 
-### Banco de Dados
-```bash
-# Execute os scripts SQL no Supabase Dashboard ou via psql
-psql -f banco-de-dados/001_schema.sql
-psql -f banco-de-dados/002_policies.sql
-```
+E o modulo que esta sendo desenvolvido no Lovable. Ele concentra:
 
-## 🔐 Segurança
+- o frontend principal usado pelos times internos
+- rotas autenticadas e publicas de operacao
+- integracao com Supabase
+- edge functions de apoio para CRUD, consultas e integracoes auxiliares
+- interface de criacao e acompanhamento das solicitacoes de assinatura
 
-- Chave privada **nunca** sai da máquina do signatário
-- Links de assinatura com token UUID + expiração
-- Assinatura PAdES com selo visível no documento
-- Auditoria completa de todas as operações
-- CORS configurável para produção
+### `backend`
+
+Responsavel pelas regras sensiveis de assinatura:
+
+- autenticacao e papeis de usuario
+- upload e armazenamento de documentos
+- geracao e validacao de links de assinatura
+- preparo do PDF para assinatura externa
+- aplicacao da assinatura CMS/PKCS#7 no PDF em padrao PAdES
+- auditoria do fluxo
+
+### `app`
+
+Aplicativo local executado na maquina do signatario. Faz a ponte com os certificados ICP-Brasil instalados no sistema operacional ou em token/smartcard, sem expor a chave privada.
+
+### `banco-de-dados`
+
+Contem a referencia do modelo de dados e scripts SQL usados no projeto.
+
+## Documentacao principal
+
+Leia a documentacao em `docs/` na seguinte ordem:
+
+1. [docs/visao-geral.md](./docs/visao-geral.md)
+2. [docs/arquitetura.md](./docs/arquitetura.md)
+3. [docs/modulos.md](./docs/modulos.md)
+4. [docs/fluxos-principais.md](./docs/fluxos-principais.md)
+5. [docs/backend-api.md](./docs/backend-api.md)
+6. [docs/onboarding.md](./docs/onboarding.md)
+
+## Fluxo resumido de assinatura
+
+1. Um usuario interno cria a solicitacao pelo frontend `operacoes-goldcredit`.
+2. O `backend` recebe os documentos, registra metadados e gera links/token de assinatura.
+3. O signatario acessa o link publico no frontend.
+4. O frontend conversa com o `app` local em `http://localhost:8765`.
+5. O `app` lista certificados e gera a assinatura local com a chave privada.
+6. O frontend envia a assinatura CMS para o `backend`.
+7. O `backend` aplica a assinatura PAdES ao PDF e registra auditoria.
+
+## Referencias rapidas
+
+- Diagrama tecnico: [ARQUITETURA.mermaid](./ARQUITETURA.mermaid)
+- Backend deploy: [backend/DEPLOY_RENDER.md](./backend/DEPLOY_RENDER.md)
+- App local: [app/README.md](./app/README.md)
+- Banco: [banco-de-dados/README.md](./banco-de-dados/README.md)
