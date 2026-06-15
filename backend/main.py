@@ -12,6 +12,7 @@ import uuid
 import asyncio
 import base64
 import json
+import logging
 import os
 import time
 from datetime import datetime, timezone
@@ -23,7 +24,7 @@ from cryptography.exceptions import InvalidSignature
 
 from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 import io
 
 from config import get_settings
@@ -49,6 +50,7 @@ from schemas import (
 )
 
 settings = get_settings()
+logger = logging.getLogger("goldsign")
 _assinaturas_pendentes: dict[str, dict] = {}
 # Rastreia qual token está no meio do fluxo preparar→submeter por documento.
 # Impede que dois signatários preparem simultaneamente o mesmo PDF,
@@ -71,6 +73,9 @@ def _build_cors_origins() -> list[str]:
         "http://127.0.0.1:8080",
         "http://localhost:5500",
         "http://127.0.0.1:5500",
+        "https://operacoes-goldcredit.vercel.app",
+        "https://operacoes-goldcredit-renans-projects-f7614520.vercel.app",
+        "https://operacoes-goldcredit-draxsd3-renans-projects-f7614520.vercel.app",
     }
     if settings.frontend_url:
         origins.add(settings.frontend_url.strip())
@@ -91,11 +96,23 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_build_cors_origins(),
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origin_regex=(
+        r"https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+        r"|https://operacoes-goldcredit(-[a-z0-9-]+)?\.vercel\.app$"
+    ),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Erro interno no backend GoldSign. Verifique os logs do Render."},
+    )
 
 
 # ============================================================
