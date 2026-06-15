@@ -243,7 +243,7 @@ def preparar_documento_pades_externo(
             ),
             background_opacity=0.10,
             border_width=1,
-            text_box_style=TextBoxStyle(font_size=8),
+            text_box_style=TextBoxStyle(font_size=5),
         ),
         new_field_spec=SigFieldSpec(
             sig_field_name=field_name,
@@ -609,7 +609,7 @@ def assinar_pdf_servidor(
             ),
             background_opacity=0.08,
             border_width=1,
-            text_box_style=TextBoxStyle(font_size=6),
+            text_box_style=TextBoxStyle(font_size=5),
         ),
         new_field_spec=SigFieldSpec(
             sig_field_name=field_name,

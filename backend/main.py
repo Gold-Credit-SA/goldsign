@@ -54,6 +54,7 @@ _assinaturas_pendentes: dict[str, dict] = {}
 # Impede que dois signatários preparem simultaneamente o mesmo PDF,
 # o que causaria corrida e perda de assinatura anterior.
 _documentos_em_preparacao: dict[str, str] = {}  # documento_id → token
+_ASSINATURA_PREPARADA_TTL_SEGUNDOS = 15 * 60
 
 # Desafios de autenticaÃ§Ã£o por certificado: {nonce_id: {"desafio": bytes, "expira_em": float}}
 _desafios_pendentes: dict[str, dict] = {}
@@ -201,6 +202,51 @@ def _status_efetivo_solicitacao(sol: dict, agora: datetime | None = None) -> str
     return status_efetivo
 
 
+def _liberar_contexto_assinatura(token: str | None, documento_id: str | None = None) -> None:
+    if token:
+        contexto = _assinaturas_pendentes.pop(token, None)
+        if documento_id is None and contexto:
+            documento_id = contexto.get("documento_id")
+    if documento_id and _documentos_em_preparacao.get(documento_id) == token:
+        _documentos_em_preparacao.pop(documento_id, None)
+
+
+def _limpar_contextos_assinatura_expirados(agora_ts: float | None = None) -> None:
+    agora_ts = agora_ts or time.time()
+    expirados = [
+        token
+        for token, contexto in _assinaturas_pendentes.items()
+        if float(contexto.get("expira_em_ts") or 0) <= agora_ts
+    ]
+    for token in expirados:
+        contexto = _assinaturas_pendentes.get(token) or {}
+        _liberar_contexto_assinatura(token, contexto.get("documento_id"))
+
+
+def _obter_solicitacao_publica_ativa(
+    token: str,
+    *,
+    permitir_assinado: bool = False,
+) -> dict:
+    solicitacao = db.buscar_solicitacao_por_token(token)
+    if not solicitacao:
+        raise HTTPException(status_code=404, detail="Solicitação não encontrada")
+
+    status_efetivo = _status_efetivo_solicitacao(solicitacao)
+    if status_efetivo == "expirado":
+        if solicitacao.get("status") != "expirado":
+            db.atualizar_solicitacao(solicitacao["id"], {"status": "expirado"})
+            db.recalcular_status_documento(solicitacao["documento_id"])
+        _liberar_contexto_assinatura(token, solicitacao.get("documento_id"))
+        raise HTTPException(status_code=410, detail="Link de assinatura expirado")
+
+    if not permitir_assinado and solicitacao.get("status") == "assinado":
+        raise HTTPException(status_code=400, detail="Documento já foi assinado")
+
+    _garantir_ordem_assinatura(solicitacao)
+    return solicitacao
+
+
 def _obter_remetente_publico() -> dict:
     remetente = db.buscar_usuario_por_email(settings.public_sender_email)
     if remetente:
@@ -261,6 +307,50 @@ def _field_name_solicitacao(solicitacao_id: str) -> str:
 
 def _gold_credit_documento() -> str:
     return "".join(c for c in str(settings.gold_credit_signer_document or "") if c.isdigit())
+
+
+_POSICOES_ASSINATURA_POR_TIPO: dict[str, dict[str, dict[str, float]]] = {
+    "contrato_mae": {
+        "cedente": {"pagina": 12, "x": 0.06, "y": 0.79, "largura": 0.46, "altura": 0.055},
+        "cessionaria_gold_credit": {"pagina": 12, "x": 0.06, "y": 0.57, "largura": 0.46, "altura": 0.055},
+        "responsavel_solidario": {"pagina": 12, "x": 0.06, "y": 0.38, "largura": 0.38, "altura": 0.055},
+    },
+    "aditivo": {
+        "cedente": {"pagina": 2, "x": 0.06, "y": 0.82, "largura": 0.46, "altura": 0.06},
+        "cessionaria_gold_credit": {"pagina": 2, "x": 0.08, "y": 0.20, "largura": 0.44, "altura": 0.06},
+        "responsavel_solidario": {"pagina": 2, "x": 0.06, "y": 0.46, "largura": 0.38, "altura": 0.06},
+    },
+}
+
+
+def _preset_assinatura_por_tipo(tipo_documento: str | None, papel: str) -> dict[str, float]:
+    tipo = (tipo_documento or "").strip().lower()
+    preset = (_POSICOES_ASSINATURA_POR_TIPO.get(tipo) or {}).get(papel)
+    if preset:
+        return preset
+    if papel == "cessionaria_gold_credit":
+        return {
+            "pagina": float(settings.gold_credit_signature_page or 12),
+            "x": float(settings.gold_credit_signature_x),
+            "y": float(settings.gold_credit_signature_y),
+            "largura": float(settings.gold_credit_signature_width),
+            "altura": float(settings.gold_credit_signature_height),
+        }
+    if tipo == "contrato_mae":
+        return {
+            "pagina": float(settings.contract_mother_signature_page or 12),
+            "x": float(settings.contract_mother_signature_x),
+            "y": float(settings.contract_mother_signature_y),
+            "largura": float(settings.contract_mother_signature_width),
+            "altura": float(settings.contract_mother_signature_height),
+        }
+    return {
+        "pagina": 1.0,
+        "x": 0.06,
+        "y": 0.06,
+        "largura": 0.44,
+        "altura": 0.12,
+    }
 
 
 def _papel_solicitacao(solicitacao: dict) -> str:
@@ -1548,11 +1638,15 @@ async def criar_solicitacao_publica(request: Request):
         if not documento:
             raise HTTPException(status_code=500, detail="Nao foi possivel criar o documento")
 
-        pagina = max(1, int(assinatura_pagina_item or (settings.contract_mother_signature_page or 12 if is_contrato_mae else 1)))
-        pos_x = _clamp_float(assinatura_x_item or 0.06, 0.0, 0.95)
-        pos_y = _clamp_float(assinatura_y_item or 0.06, 0.0, 0.95)
-        largura = _clamp_float(assinatura_largura_item or 0.44, 0.05, 1.0)
-        altura = _clamp_float(assinatura_altura_item or 0.12, 0.05, 1.0)
+        preset_cedente = _preset_assinatura_por_tipo(
+            "contrato_mae" if is_contrato_mae else tipo_documento_item,
+            "cedente",
+        )
+        pagina = max(1, int(assinatura_pagina_item or preset_cedente["pagina"]))
+        pos_x = _clamp_float(assinatura_x_item or preset_cedente["x"], 0.0, 0.95)
+        pos_y = _clamp_float(assinatura_y_item or preset_cedente["y"], 0.0, 0.95)
+        largura = _clamp_float(assinatura_largura_item or preset_cedente["largura"], 0.05, 1.0)
+        altura = _clamp_float(assinatura_altura_item or preset_cedente["altura"], 0.05, 1.0)
 
         solicitacao = _criar_solicitacao_signatario_publico(
             documento=documento,
@@ -1576,11 +1670,15 @@ async def criar_solicitacao_publica(request: Request):
         solicitacoes_criadas.append(_serializar_solicitacao_publica(documento, solicitacao))
 
         if incluir_assinatura_gold_credit:
-            gc_pagina = max(1, int(assinatura_pagina_gc_item or settings.gold_credit_signature_page or 12))
-            gc_x = _clamp_float(assinatura_x_gc_item or settings.gold_credit_signature_x, 0.0, 0.95)
-            gc_y = _clamp_float(assinatura_y_gc_item or settings.gold_credit_signature_y, 0.0, 0.95)
-            gc_largura = _clamp_float(assinatura_largura_gc_item or settings.gold_credit_signature_width, 0.05, 1.0)
-            gc_altura = _clamp_float(assinatura_altura_gc_item or settings.gold_credit_signature_height, 0.05, 1.0)
+            preset_gc = _preset_assinatura_por_tipo(
+                "contrato_mae" if is_contrato_mae else tipo_documento_item,
+                "cessionaria_gold_credit",
+            )
+            gc_pagina = max(1, int(assinatura_pagina_gc_item or preset_gc["pagina"]))
+            gc_x = _clamp_float(assinatura_x_gc_item or preset_gc["x"], 0.0, 0.95)
+            gc_y = _clamp_float(assinatura_y_gc_item or preset_gc["y"], 0.0, 0.95)
+            gc_largura = _clamp_float(assinatura_largura_gc_item or preset_gc["largura"], 0.05, 1.0)
+            gc_altura = _clamp_float(assinatura_altura_gc_item or preset_gc["altura"], 0.05, 1.0)
 
             solicitacao_gold_credit = _criar_solicitacao_signatario_publico(
                 documento=documento,
@@ -1659,7 +1757,11 @@ async def criar_solicitacao_publica(request: Request):
             solicitacoes_criadas.append(_serializar_solicitacao_publica(documento, solicitacao_gold_credit))
 
         if tem_responsavel and bundle_token_responsavel:
-            pagina_rs = max(1, int(assinatura_pagina_rs_item or assinatura_pagina_item or 1))
+            preset_rs = _preset_assinatura_por_tipo(
+                "contrato_mae" if is_contrato_mae else tipo_documento_item,
+                "responsavel_solidario",
+            )
+            pagina_rs = max(1, int(assinatura_pagina_rs_item or preset_rs["pagina"]))
             solicitacao_rs = _criar_solicitacao_signatario_publico(
                 documento=documento,
                 signatario_email=rs_email,
@@ -1667,10 +1769,10 @@ async def criar_solicitacao_publica(request: Request):
                 assinatura_doc=rs_doc,
                 mensagem=mensagem_item,
                 assinatura_pagina=pagina_rs,
-                assinatura_x=_clamp_float(assinatura_x_rs_item or 0.52, 0.0, 0.95),
-                assinatura_y=_clamp_float(assinatura_y_rs_item or 0.08, 0.0, 0.95),
-                assinatura_largura=_clamp_float(assinatura_largura_rs_item or 0.44, 0.05, 1.0),
-                assinatura_altura=_clamp_float(assinatura_altura_rs_item or 0.12, 0.05, 1.0),
+                assinatura_x=_clamp_float(assinatura_x_rs_item or preset_rs["x"], 0.0, 0.95),
+                assinatura_y=_clamp_float(assinatura_y_rs_item or preset_rs["y"], 0.0, 0.95),
+                assinatura_largura=_clamp_float(assinatura_largura_rs_item or preset_rs["largura"], 0.05, 1.0),
+                assinatura_altura=_clamp_float(assinatura_altura_rs_item or preset_rs["altura"], 0.05, 1.0),
                 papel="responsavel_solidario",
                 bundle_token=bundle_token_responsavel,
                 operation_id=operation_id,
@@ -1814,20 +1916,7 @@ async def obter_operacao_publica(bundle_token: str):
 @app.get("/api/assinatura/{token}")
 async def obter_solicitacao_por_token(token: str, request: Request):
     """Acesso pÃºblico ao documento via token seguro."""
-    solicitacao = db.buscar_solicitacao_por_token(token)
-    if not solicitacao:
-        raise HTTPException(status_code=404, detail="SolicitaÃ§Ã£o nÃ£o encontrada")
-
-    expira_em = datetime.fromisoformat(solicitacao["expira_em"].replace("Z", "+00:00"))
-    if datetime.now(timezone.utc) > expira_em:
-        db.atualizar_solicitacao(solicitacao["id"], {"status": "expirado"})
-        db.recalcular_status_documento(solicitacao["documento_id"])
-        raise HTTPException(status_code=410, detail="Link de assinatura expirado")
-
-    if solicitacao["status"] == "assinado":
-        raise HTTPException(status_code=400, detail="Documento jÃ¡ foi assinado")
-
-    _garantir_ordem_assinatura(solicitacao)
+    solicitacao = _obter_solicitacao_publica_ativa(token)
 
     if solicitacao["status"] == "pendente":
         db.atualizar_solicitacao(solicitacao["id"], {
@@ -1869,12 +1958,7 @@ async def obter_solicitacao_por_token(token: str, request: Request):
 @app.post("/api/assinatura/{token}/validar-certificado")
 async def validar_certificado_para_solicitacao(token: str, dados: ValidarCertificadoSolicitacaoRequest):
     """Valida se o CPF/CNPJ do certificado é permitido para a solicitação."""
-    solicitacao = db.buscar_solicitacao_por_token(token)
-    if not solicitacao:
-        raise HTTPException(status_code=404, detail="Solicitação não encontrada")
-    if solicitacao["status"] == "assinado":
-        raise HTTPException(status_code=400, detail="Documento já foi assinado")
-    _garantir_ordem_assinatura(solicitacao)
+    solicitacao = _obter_solicitacao_publica_ativa(token)
 
     cert_doc = "".join(c for c in str(dados.cpf_cnpj or "") if c.isdigit())
     if not cert_doc:
@@ -1905,10 +1989,7 @@ async def validar_certificado_para_solicitacao(token: str, dados: ValidarCertifi
 @app.get("/api/assinatura/{token}/pdf")
 async def visualizar_pdf_por_token(token: str):
     """Download do PDF para visualizaÃ§Ã£o (acesso via token)."""
-    solicitacao = db.buscar_solicitacao_por_token(token)
-    if not solicitacao:
-        raise HTTPException(status_code=404, detail="SolicitaÃ§Ã£o nÃ£o encontrada")
-    _garantir_ordem_assinatura(solicitacao)
+    solicitacao = _obter_solicitacao_publica_ativa(token)
 
     doc = solicitacao.get("documentos", {})
     storage_path_fonte = doc.get("storage_path_assinado") or doc["storage_path"]
@@ -1924,13 +2005,8 @@ async def visualizar_pdf_por_token(token: str):
 @app.post("/api/assinatura/{token}/preparar")
 async def preparar_assinatura(token: str, request: Request):
     """Prepara o conteÃºdo (hash) a ser assinado."""
-    solicitacao = db.buscar_solicitacao_por_token(token)
-    if not solicitacao:
-        raise HTTPException(status_code=404, detail="SolicitaÃ§Ã£o nÃ£o encontrada")
-
-    if solicitacao["status"] == "assinado":
-        raise HTTPException(status_code=400, detail="Documento jÃ¡ foi assinado")
-    _garantir_ordem_assinatura(solicitacao)
+    _limpar_contextos_assinatura_expirados()
+    solicitacao = _obter_solicitacao_publica_ativa(token)
 
     doc_id = solicitacao["documento_id"]
     token_em_uso = _documentos_em_preparacao.get(doc_id)
@@ -1961,6 +2037,7 @@ async def preparar_assinatura(token: str, request: Request):
         "reserved_region_end": conteudo_assinatura["reserved_region_end"],
         "documento_id": solicitacao["documento_id"],
         "solicitacao_id": solicitacao["id"],
+        "expira_em_ts": time.time() + _ASSINATURA_PREPARADA_TTL_SEGUNDOS,
     }
     _documentos_em_preparacao[doc_id] = token
 
@@ -1986,13 +2063,8 @@ async def preparar_assinatura(token: str, request: Request):
 async def submeter_assinatura(dados: SubmeterAssinaturaRequest, request: Request):
     """Recebe a assinatura CMS/PKCS#7 e incorpora ao PDF no padrÃ£o PAdES."""
     try:
-        solicitacao = db.buscar_solicitacao_por_token(dados.token_acesso)
-        if not solicitacao:
-            raise HTTPException(status_code=404, detail="SolicitaÃ§Ã£o nÃ£o encontrada")
-
-        if solicitacao["status"] == "assinado":
-            raise HTTPException(status_code=400, detail="Documento jÃ¡ foi assinado")
-        _garantir_ordem_assinatura(solicitacao)
+        _limpar_contextos_assinatura_expirados()
+        solicitacao = _obter_solicitacao_publica_ativa(dados.token_acesso)
 
         doc = solicitacao.get("documentos", {})
         info_cert = extrair_info_certificado(dados.cert_pem)
@@ -2003,7 +2075,15 @@ async def submeter_assinatura(dados: SubmeterAssinaturaRequest, request: Request
         if not contexto_assinatura:
             raise HTTPException(
                 status_code=400,
-                detail="PreparaÃ§Ã£o de assinatura nÃ£o encontrada. Execute /preparar novamente.",
+                detail="PreparaÃ§Ã£o de assinatura nÃ£o encontrada ou expirada. Execute /preparar novamente.",
+            )
+        if (
+            contexto_assinatura.get("documento_id") != solicitacao["documento_id"]
+            or contexto_assinatura.get("solicitacao_id") != solicitacao["id"]
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Contexto de assinatura inconsistente. Execute /preparar novamente.",
             )
 
         pdf_assinado = await asyncio.to_thread(
